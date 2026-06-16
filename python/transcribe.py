@@ -8,8 +8,26 @@ On success: {"ok": true, "srtPath": "...", "text": "...", "segments": [{"start":
 On failure: {"ok": false, "error": "..."}  (and non-zero exit code)
 """
 
+import glob
 import json
+import os
 import sys
+
+
+def add_nvidia_dll_directories():
+    """pip-installed nvidia-cublas-cu12 / nvidia-cudnn-cu12 ship their DLLs
+    under site-packages/nvidia/*/bin, which Windows does not search by
+    default. ctranslate2 (faster-whisper's backend) needs them on the DLL
+    search path to use the GPU."""
+    if os.name != "nt":
+        return
+    for site_packages in sys.path:
+        for bin_dir in glob.glob(os.path.join(site_packages, "nvidia", "*", "bin")):
+            os.add_dll_directory(bin_dir)
+            # ctranslate2's native extension loads CUDA DLLs via plain
+            # LoadLibrary (no search-path flags), which only honors PATH,
+            # not os.add_dll_directory. Prepend to PATH too so it's found.
+            os.environ["PATH"] = bin_dir + os.pathsep + os.environ.get("PATH", "")
 
 
 def format_timestamp(seconds):
@@ -42,6 +60,7 @@ def main():
     media_path, model_size, out_srt_path = sys.argv[1], sys.argv[2], sys.argv[3]
 
     try:
+        add_nvidia_dll_directories()
         from faster_whisper import WhisperModel
 
         print(f"[transcribe] loading model={model_size}", file=sys.stderr)
