@@ -1,0 +1,16 @@
+{
+  "inputPath": "input/input.mp4",
+  "detectionMode": "claude",
+  "candidateCount": 8,
+  "clipMinSec": 15,
+  "clipMaxSec": 30,
+  "leadInSec": 3,
+  "whisperModel": "medium",
+  "whisperTimeoutSec": 60,
+  "fullTranscribeTimeoutSec": 1800,
+  "claudeModel": "claude-sonnet-4-6",
+  "outputWidth": 1080,
+  "outputHeight": 1920,
+  "fontName": "Yu Gothic",
+  "fontSize": 18
+}

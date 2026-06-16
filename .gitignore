@@ -1,0 +1,11 @@
+node_modules/
+.env
+work/*
+candidates/*
+!work/.gitkeep
+!candidates/.gitkeep
+input/*
+!input/.gitkeep
+*.log
+__pycache__/
+*.pyc

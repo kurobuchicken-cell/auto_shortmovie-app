@@ -1,0 +1,192 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<style>
+  body { font-family: 'Noto Sans JP', Arial, sans-serif; font-size: 11pt; color: #000; margin: 40px; line-height: 1.8; }
+  h1 { font-size: 20pt; font-weight: bold; border-bottom: 2px solid #000; padding-bottom: 8px; margin-top: 40px; }
+  h2 { font-size: 14pt; font-weight: bold; margin-top: 32px; border-left: 4px solid #333; padding-left: 10px; }
+  h3 { font-size: 12pt; font-weight: bold; margin-top: 24px; }
+  table { border-collapse: collapse; width: 100%; margin: 16px 0; }
+  th { background-color: #333; color: #fff; padding: 8px 12px; text-align: left; font-size: 10pt; }
+  td { border: 1px solid #ccc; padding: 8px 12px; font-size: 10pt; vertical-align: top; }
+  tr:nth-child(even) td { background-color: #f5f5f5; }
+  pre { background-color: #f0f0f0; border: 1px solid #ccc; padding: 16px; font-family: monospace; font-size: 10pt; white-space: pre-wrap; line-height: 1.6; border-radius: 4px; }
+  code { background:#eee; padding:1px 4px; border-radius:3px; font-family:monospace; }
+  .flow { background-color: #f9f9f9; border: 1px solid #ddd; padding: 20px; border-radius: 4px; font-size: 10pt; line-height: 2; }
+  .highlight { background-color: #fff3cd; padding: 12px 16px; border-left: 4px solid #f0a500; margin: 16px 0; }
+  .caution { background-color: #fdecea; padding: 12px 16px; border-left: 4px solid #d32f2f; margin: 16px 0; }
+  p { margin: 8px 0; }
+  ul,ol { margin: 8px 0; padding-left: 24px; }
+  li { margin: 4px 0; }
+</style>
+</head>
+<body>
+
+<h1>NORTHEPTION 動画ショート化ツール 仕様書</h1>
+<p style="color:#666; font-size:9pt;">作成日：2026年6月16日（v1）／最終更新：2026年6月16日（v2）／用途：オバクック等の長尺ゲームプレイ動画から、ショート候補を半自動生成する</p>
+
+<div class="highlight">
+<strong>v2での変更点（実装後の反映）：</strong>
+ハイライト検出を<strong>音声ラウドネス方式</strong>と<strong>Claude API方式</strong>の2モードに対応（<code>--mode loudness</code> / <code>--mode claude</code>、既定は<code>claude</code>）。
+v1で「将来の拡張」としていたClaude API版を正式実装し、既定の検出方式に格上げした。旧方式（ラウドネス）は無料・APIキー不要の選択肢として残している。
+詳細は「<a href="#claude-mode">7. ハイライト検出：Claude APIモード（v2で追加）</a>」を参照。
+</div>
+
+<hr>
+
+<h2>設計思想：人間の仕事は「判断」だけ</h2>
+
+<p>このツールは<strong>全自動投稿ツールではない</strong>。SNS botと同じ「1対多（機械が候補を出す・最終判断は人）」の動画版。機械が雑務（探す・切る・縦化・字幕）を全部やり、人間に残すのは<strong>「どれが良いか選ぶ」判断だけ</strong>にする。</p>
+
+<table>
+<tr><th>Before（手作業）</th><th>After（このツール導入後）</th></tr>
+<tr>
+<td>1時間の動画をスクラブして良い瞬間を探す → 手で切る → 縦にリサイズ → 字幕を打つ → 結局やらない</td>
+<td>動画を1本フォルダに置いてコマンド1つ → 縦化・字幕済みの候補が6〜8本出てくる → 短い候補を見て1本選ぶだけ</td>
+</tr>
+</table>
+
+<h2>人間がやること（これだけ）</h2>
+<ol>
+<li><strong>選ぶ</strong>：出力された候補クリップ（各15〜30秒・縦・字幕付き）を見て、出す1本を選ぶ</li>
+<li><strong>承認</strong>：キャプション（SNS botで生成）を確認し、<strong>双子が映る場合は保護者とすり合わせ</strong>た上で手動投稿</li>
+</ol>
+<div class="highlight">探す・切る・縦化・字幕は全部ツールが自動でやる。人間の所要は「短い候補を数本見て選ぶ」＝数分。</div>
+
+<h2>全体フロー</h2>
+
+<div class="flow">
+① 1時間の動画（<code>input.mp4</code>）を <code>/input</code> フォルダに置く<br>
+② コマンド実行（例：<code>npm run clips</code>。既定は<code>--mode claude</code>）<br>
+③ <strong>ハイライト検出</strong>（モードにより分岐）<br>
+　・<code>--mode claude</code>（既定）：動画<strong>全体</strong>をWhisperで文字起こし → タイムスタンプ付きテキストをClaude APIに渡し、盛り上がり区間をN個選んでもらう<br>
+　・<code>--mode loudness</code>：音声ピーク（声・笑い）の時間帯を自動抽出 → 候補タイムスタンプN個<br>
+④ 各候補を <strong>FFmpegで切り出し</strong>（15〜30秒）<br>
+⑤ <strong>9:16縦化</strong>（背景ぼかしレターボックス）<br>
+⑥ 各クリップをfaster-whisperで個別に文字起こしして字幕生成 → クリップに焼き込み<br>
+⑦ <code>/candidates</code> に <code>clip_01.mp4 … clip_0N.mp4</code> ＋ <code>manifest.json</code> を出力<br>
+⑧ <strong>人間が候補を見て1本選ぶ</strong>（以降は手動投稿）
+</div>
+
+<h2>技術スタック</h2>
+
+<table>
+<tr><th>項目</th><th>内容</th></tr>
+<tr><td>実行環境</td><td><strong>ローカルPC（Windows）</strong>。動画処理は重くFly.io無料枠に不向きなため、ローカルでバッチ実行する。SNS botは従来通りFly.io。</td></tr>
+<tr><td>オーケストレーション</td><td>Node.js（既存スタックに合わせる）。各CLIを <code>child_process</code> で呼び出す</td></tr>
+<tr><td>動画処理</td><td><strong>FFmpeg</strong>（カット・縦化・字幕焼き込み・音声解析）。オープンソース・無料</td></tr>
+<tr><td>文字起こし</td><td>実装は<strong>faster-whisper</strong>（pip）。当初予定のwhisper.cppはWindowsビルドが大変なため、仕様書記載の代替案として採用した</td></tr>
+<tr><td>ハイライト検出</td><td><strong>2モード対応（<code>--mode</code>で切替、既定<code>claude</code>）</strong><br>
+・<code>claude</code>：全体文字起こし＋Claude API（<code>claude-sonnet-4-6</code>）で盛り上がり区間を判定。精度優先<br>
+・<code>loudness</code>：音声ラウドネス時系列のピーク検出。完全無料・ローカル・APIキー不要だが誤検出が出やすい</td></tr>
+<tr><td>コスト</td><td><code>--mode claude</code>（既定）は実行ごとに少額のAPI課金が発生（数円規模）。<code>--mode loudness</code>なら0円</td></tr>
+</table>
+
+<h2>各ステップの実装指示</h2>
+
+<h3>1. 入力</h3>
+<ul>
+<li><code>/input/input.mp4</code> を処理対象とする（ファイル名は引数で上書き可）</li>
+<li>作業用に音声だけ抽出：<code>ffmpeg -i input.mp4 -ac 1 -ar 16000 -vn work/audio.wav</code>（whisper.cpp用に16kHzモノラル）</li>
+</ul>
+
+<h3>2. 音声ピーク検出（候補タイムスタンプの抽出）<span style="color:#888; font-size:9pt;">（<code>--mode loudness</code> 時のみ。既定は8番のClaude APIモード）</span></h3>
+<p>盛り上がりの代理指標として<strong>ラウドネス（音量）の時系列</strong>を使う。掛け合いゲーム（オバクック2人プレイ）では声が上がる瞬間＝面白い瞬間と相関しやすい。</p>
+<ul>
+<li>FFmpegの <code>ebur128</code> フィルタで瞬時ラウドネス（Momentary, M値）を出力し、stderrから時刻＋M値をパースして1秒粒度の時系列を作る<br>
+　例：<code>ffmpeg -i work/audio.wav -af ebur128=metadata=1 -f null - 2&gt; loudness.log</code> → ログを正規表現でパース</li>
+<li>移動平均でノイズを均し、上位ピークを検出。<strong>近接するピークは1つの区間にマージ</strong></li>
+<li>各ピークを中心に <strong>15〜30秒の窓</strong>に広げる（前2〜3秒・後ろ長めにして"オチ"を含める）。窓が重なる候補は統合</li>
+<li>ラウドネススコア上位から <strong>N件（既定8件）</strong>を候補として採用</li>
+</ul>
+<div class="caution"><strong>限界（重要）：</strong>音声ピークは「うるさい＝面白い」ではない。ゲームSEや苛立ちの声も拾う。<strong>誤検出が出る前提で候補を多めに出し、最終選択は人間が行う</strong>（＝このツールの設計思想そのもの）。</div>
+
+<h3>3. クリップ切り出し（FFmpeg）</h3>
+<pre>ffmpeg -ss [開始秒] -i input.mp4 -t [長さ秒] -c:v libx264 -c:a aac work/cut_NN.mp4</pre>
+<p>※ <code>-ss</code> を入力前に置くと高速シーク。フレーム精度が必要なら入力後に置く。</p>
+
+<h3>4. 9:16縦化（背景ぼかしレターボックス）</h3>
+<p>オバクックは俯瞰固定画面で、単純な中央クロップだと厨房の端が切れる。<strong>元映像をぼかして背景に敷き、その上に元映像全体を載せる</strong>方式が安全。出力は1080×1920。</p>
+<pre>ffmpeg -i work/cut_NN.mp4 -filter_complex \
+"[0:v]scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,boxblur=20:5[bg]; \
+ [0:v]scale=1080:-1[fg]; \
+ [bg][fg]overlay=(W-w)/2:(H-h)/2" \
+-c:a copy work/vert_NN.mp4</pre>
+
+<h3>5. 字幕生成・焼き込み</h3>
+<ul>
+<li>各クリップの音声を whisper.cpp に渡し <code>.srt</code> を生成（日本語モデル：<code>ggml-medium</code> 目安。精度優先なら <code>large</code>、速度優先なら <code>small</code>）</li>
+<li>SRTをFFmpegで焼き込み：<br>
+<code>ffmpeg -i work/vert_NN.mp4 -vf "subtitles=work/sub_NN.srt:force_style='Fontsize=18,Outline=2,Alignment=2'" candidates/clip_NN.mp4</code></li>
+<li>字幕スタイルは下部中央・縁取り付き（音声オフ視聴対策）。フォントはNoto Sans JP等の日本語対応を指定</li>
+</ul>
+<div class="caution"><strong>限界：</strong>ゲームSE混じりの音声では字幕に誤変換が出ることがある。人間は<strong>字幕が綺麗な候補を選べばよい</strong>（or 採用1本だけ手直し）。</div>
+
+<h3>6. 出力</h3>
+<ul>
+<li><code>/candidates/clip_01.mp4 … clip_0N.mp4</code>（縦・字幕済み・即視聴可）</li>
+<li><code>/candidates/manifest.json</code>：各候補の <code>{ ファイル名, 元動画の開始/終了秒, 長さ, ラウドネススコア, 字幕テキスト }</code>。人間が一覧で見て選びやすくするため</li>
+</ul>
+
+<h3 id="claude-mode">7. ハイライト検出：Claude APIモード（v2で追加・既定）</h3>
+<p>ラウドネス検出（うるさい＝面白い、という乱暴な代理指標）の誤検出を減らすため、<strong>文字起こしの内容そのものをClaudeに判断させる</strong>方式。仕様書v1の「将来の拡張」案を正式実装し、既定モードに格上げした。</p>
+<ul>
+<li>動画全体の音声を抽出し、faster-whisperで<strong>全文文字起こし</strong>（タイムスタンプ付き）</li>
+<li>文字起こしテキストを「<code>[開始-終了] テキスト</code>」形式に整形し、Claude API（モデル：<code>claude-sonnet-4-6</code>）に渡す</li>
+<li>プロンプト例：「以下はゲーム実況の文字起こしです。2人の掛け合い・笑い・驚き・盛り上がりが伝わる区間をN箇所選び、各区間の開始秒・終了秒・選んだ理由をJSONで返してください」</li>
+<li>返ってきたJSON（<code>[{"startSec":..,"endSec":..,"reason":".."}, ...]</code>）のタイムスタンプを使い、以降は3〜6番の手順（切り出し・縦化・字幕焼き込み）を共通実行</li>
+<li>選定理由（<code>reason</code>）は <code>manifest.json</code> に格納し、人間が候補を選ぶ際の参考情報にする</li>
+</ul>
+<div class="caution"><strong>注意：</strong>このモードはClaude APIを呼ぶため、APIキー（<code>ANTHROPIC_API_KEY</code>）が必要かつ実行ごとに少額の課金が発生する（v1で「完全無料」としていた前提から外れる）。APIキーはプロジェクト直下の <code>.env</code> ファイル（<code>ANTHROPIC_API_KEY=sk-ant-...</code>）で管理し、OneDrive経由で開発環境間を引き継ぐ。Windowsレジストリ等PC単体にしか効かない保存方法は使わない。課金やAPIキー設定を避けたい場合は <code>--mode loudness</code>（v1のラウドネス方式）に切り替えれば従来通り無料・ローカルのみで動作する。</div>
+
+<h2>パラメータ（すべて調整可・config化）</h2>
+<table>
+<tr><th>項目</th><th>既定</th><th>備考</th></tr>
+<tr><td>検出モード</td><td>claude</td><td><code>--mode loudness</code>でv1方式（無料）に切替可</td></tr>
+<tr><td>候補数 N</td><td>8</td><td>多いほど選択肢が増えるが処理時間も増える</td></tr>
+<tr><td>クリップ長</td><td>15〜30秒</td><td>ショート最適。下限/上限を設定</td></tr>
+<tr><td>Whisperモデル</td><td>medium</td><td>PC性能で調整（large=高精度・低速 / small・tiny=低精度・高速）</td></tr>
+<tr><td>出力解像度</td><td>1080×1920</td><td>9:16</td></tr>
+<tr><td>Claudeモデル</td><td>claude-sonnet-4-6</td><td><code>--mode claude</code>時のみ使用</td></tr>
+<tr><td>文字起こしタイムアウト（クリップ単位）</td><td>60秒</td><td>超過したクリップはスキップして次へ進む</td></tr>
+<tr><td>文字起こしタイムアウト（全体）</td><td>1800秒</td><td><code>--mode claude</code>の全体文字起こし用</td></tr>
+</table>
+
+<h2>前提・初回セットアップ（一度だけ）</h2>
+<p>セットアップ自体もClaude Codeに実行させる。以降は「動画を置く→コマンド」だけ。</p>
+<ul>
+<li><strong>FFmpeg</strong> をインストールしPATHを通す</li>
+<li><strong>whisper.cpp</strong> をビルド（or プレビルドバイナリ）＋ 日本語対応 ggml モデル（medium）をダウンロード。Windowsでビルドが詰まる場合は <code>pip install faster-whisper</code> に切替</li>
+<li><strong>Node.js</strong>（既存環境）</li>
+<li>日本語フォント（字幕焼き込み用）</li>
+</ul>
+<div class="caution"><strong>PC性能の確認：</strong>Whisperのローカル文字起こしはCPU/GPUに依存。1時間動画の全文字起こしは重いが、本ツールは<strong>切り出した短いクリップ（合計数分）だけを文字起こしする</strong>ので負荷は小さい。初回に1クリップで所要時間を計測し、モデルサイズを調整する。</div>
+
+<h2>正直な限界と、それを判断で吸収する設計</h2>
+<ul>
+<li>（<code>--mode loudness</code>時）音声ピーク検出は「面白い」を保証しない（うるさい瞬間を拾う）。→ <strong>候補を多め＋人間が選ぶ</strong>ことで吸収</li>
+<li>（<code>--mode claude</code>時）Claudeの判断は文字起こし（faster-whisper）の精度に依存する。文字起こし自体が誤っていれば、Claudeもその誤った内容を基に判断する。また実行ごとに少額の課金が発生し「完全無料」ではなくなる</li>
+<li>字幕は誤変換が出る。→ <strong>綺麗な候補を選ぶ</strong>か採用1本だけ手直し</li>
+<li>クラウドで「全自動・無料・透かし無し」は実在しない。<strong>無料を貫くなら<code>--mode loudness</code>＋人の最終確認</strong>がこのツールの条件</li>
+</ul>
+
+<h2>将来の拡張（任意・今はやらない）</h2>
+<ul>
+<li><strong>賢い検出</strong>：<del>切り出し前に全文の文字起こしを取り、Claude APIに「掛け合いが面白い区間」を選ばせる</del> → <strong>v2で実装済み</strong>（<code>--mode claude</code>、既定）。詳細は「7. ハイライト検出：Claude APIモード」参照</li>
+<li><strong>キャプション連携</strong>：採用クリップの字幕テキストをSNS botに渡し、金枠（slot=story）方針でキャプション3案を生成（未実装）</li>
+</ul>
+
+<h2>NORTHEPTION運用ルールとの整合</h2>
+<ul>
+<li><strong>X APIは使わない／投稿は手動</strong>（SNS botと同じ。発信の最終判断は人間）</li>
+<li><strong>枠：金枠（slot=story／居着かせ）</strong>。認知の入口ではない</li>
+<li><strong>ハッシュタグ例外</strong>：オバクックはSF6ではないため、この動画投稿は <code>#SF6</code> を外し <code>#NthWIN</code> ＋ <code>#Overcooked2</code> 等に差し替える</li>
+<li><strong>未成年ゲート</strong>：双子（14歳）が映る場合、投稿前に保護者（@murasaki_15922）とすり合わせ</li>
+<li><strong>IP</strong>：Overcooked! 2 のショート投稿・収益化はTeam17より許諾済み（公式チーム垢・選手個人垢いずれも可。ゲーム本体の販売を伴わないこと）</li>
+</ul>
+
+<div class="highlight">この仕様書をVS CodeのClaude Codeに渡して実装する。チャットとClaude Codeは記憶を共有しないため、この仕様書が翻訳機になる（背景＋実装指示を厚めに記載済み）。</div>
+
+</body>
+</html>

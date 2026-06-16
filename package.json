@@ -1,0 +1,12 @@
+{
+  "name": "auto-shortmovie-app",
+  "version": "1.0.0",
+  "description": "長尺ゲームプレイ動画からショート動画候補を半自動生成するローカルツール",
+  "private": true,
+  "main": "src/index.js",
+  "scripts": {
+    "setup": "node scripts/setup.js",
+    "clips": "node --env-file-if-exists=.env src/index.js"
+  },
+  "license": "UNLICENSED"
+}
