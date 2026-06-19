@@ -6,7 +6,9 @@
   "main": "src/index.js",
   "scripts": {
     "setup": "node scripts/setup.js",
-    "clips": "node --env-file-if-exists=.env src/index.js"
+    "clips": "node --env-file-if-exists=.env src/index.js",
+    "manual-clip": "node --env-file-if-exists=.env scripts/manual-clip.js",
+    "karaoke": "node scripts/karaoke-mark.js"
   },
   "license": "UNLICENSED"
 }

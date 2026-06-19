@@ -2,6 +2,35 @@
 
 過去のバグ・修正の記録。新しいものを上に追記する。
 
+## 2026-06-16: 家PC（高性能機）への移設をgit経由で実施
+
+- **背景**: `SETUP_HANDOFF.md`はOneDrive同期での移設を想定していたが、実際にはgitリポジトリ化
+  （`kurobuchicken-cell/auto_shortmovie-app`）して`C:\Users\kurob\dev\auto_shortmovie-app`に
+  クローンする方式で移設された。OneDriveパス・`.env`の自動同期は発生しないため、APIキーと
+  `input/input.mp4`は別途用意が必要だった。
+- **Python未導入**: `python`/`py`コマンドはWindowsの「アプリ実行エイリアス」
+  （Microsoft Storeへのスタブ）のみで、実体が入っていなかった
+  （`python --version`が応答せず`py`は`command not found`）。
+  `winget install --id Python.Python.3.13 -e` で実体をインストールして解決。
+- **ffmpeg初回winget導入直後の未認識**: 既知の事象どおり、`npm run setup`実行中の同一シェルでは
+  winget導入直後のffmpegがPATHに反映されず`FAIL`になった。新しいシェル（PATHを
+  `Machine`+`User`から再取得）で再実行したところ`OK`になった。
+- **GPU確認**: `nvidia-smi`でNVIDIA GeForce RTX 4060（Driver 546.17, CUDA 12.3）を確認。
+- **GPU有効化（cuBLAS/cuDNN）**: `device="auto"`でモデル読み込み自体は成功するが、実際に
+  `model.transcribe()`を呼んだ瞬間（エンコード時に初めてcuBLASが要求される）に
+  `Library cublas64_12.dll is not found or cannot be loaded` で失敗した。
+  - `pip install nvidia-cublas-cu12 nvidia-cudnn-cu12`（`python/requirements.txt`に追記）で
+    DLL自体は`site-packages\nvidia\*\bin`に入るが、Windowsはこの場所を自動でDLL検索しない。
+  - `os.add_dll_directory()`（Python標準のDLL検索パス追加API）を試したが、ctranslate2の
+    ネイティブ拡張は素のLoadLibrary呼び出しでDLLを探すため、これだけでは効かなかった
+    （実際に`ctypes.WinDLL`で直接読めばadd_dll_directoryは効くのに、ctranslate2経由だと失敗する）。
+  - **修正**: `python/transcribe.py`に`add_nvidia_dll_directories()`を追加し、
+    `os.add_dll_directory()`に加えて該当ディレクトリを`os.environ["PATH"]`の先頭にも
+    明示的に追加するようにした（PATHベースの検索は確実に効く）。`faster_whisper`を
+    importする前に呼ぶ必要がある。
+  - 修正後、GPUでの文字起こしが正常に動作し、1時間強の動画の全体文字起こし（`--mode claude`）
+    が完走することを確認した。
+
 ## 2026-06-16: ハイライト検出をClaude APIベースに変更（--mode追加）
 
 - **背景**: 音声ラウドネスのピーク検出は「うるさい＝面白い」を保証せず誤検出が多い

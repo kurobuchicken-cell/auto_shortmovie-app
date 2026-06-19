@@ -6,15 +6,13 @@ const { pad } = require('./clip');
 
 const SCRIPT_PATH = path.join(__dirname, '..', 'python', 'transcribe.py');
 
-async function transcribeClip(candidate, config, workDir) {
+async function transcribeClip(candidate, config, workDir, initialPrompt) {
   const nn = pad(candidate.index);
   const srtPath = path.join(workDir, `sub_${nn}.srt`);
   const timeoutMs = (config.whisperTimeoutSec || 60) * 1000;
-  const { stdout, stderr } = await runPython(
-    [SCRIPT_PATH, candidate.vertPath, config.whisperModel, srtPath],
-    timeoutMs,
-    `candidate #${candidate.index}`
-  );
+  const args = [SCRIPT_PATH, candidate.vertPath, config.whisperModel, srtPath, 'segment'];
+  if (initialPrompt) args.push('--initial-prompt', initialPrompt);
+  const { stdout, stderr } = await runPython(args, timeoutMs, `candidate #${candidate.index}`);
 
   const lastLine = stdout.trim().split('\n').filter(Boolean).pop();
   let result;

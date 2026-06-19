@@ -7,7 +7,7 @@ const { loadConfig } = require('./config');
 const { runAllChecks } = require('./deps-check');
 const { extractAudio } = require('./audio');
 const { detectCandidates } = require('./loudness');
-const { detectCandidatesViaClaude } = require('./claude-detect');
+const { detectCandidatesViaClaude, summarizeClipReason, buildInitialPromptText } = require('./claude-detect');
 const { cutClip } = require('./clip');
 const { toVertical } = require('./vertical');
 const { transcribeClip } = require('./subtitles');
@@ -39,11 +39,23 @@ async function runPool(items, limit, worker) {
   return results;
 }
 
-async function processCandidate(candidate, config) {
+async function processCandidate(candidate, config, fullSegments) {
   let c = candidate;
   c = await cutClip(config.inputPath, c, WORK_DIR);
   c = await toVertical(c, config, WORK_DIR);
-  c = await transcribeClip(c, config, WORK_DIR);
+  // Priming faster-whisper with the real dialogue immediately preceding this
+  // clip cuts down on hallucination - re-transcribing a clip in isolation
+  // (no prior context) makes it more prone to inventing fluent-sounding text
+  // to fill silent/ambiguous stretches.
+  const initialPrompt = fullSegments ? buildInitialPromptText(fullSegments, c.startSec) : null;
+  c = await transcribeClip(c, config, WORK_DIR, initialPrompt);
+  if (config.detectionMode === 'claude') {
+    // The upfront window-selection reason can describe dialogue just outside
+    // the chosen start/end (Claude conflates nearby moments). Regenerate it
+    // from the clip's actual transcribed text now that we have it.
+    const reason = await summarizeClipReason(c.subtitleText, config);
+    if (reason) c = { ...c, reason };
+  }
   c = await burnSubtitles(c, config, CANDIDATES_DIR);
   return c;
 }
@@ -65,9 +77,12 @@ async function main() {
   const audioWavPath = await extractAudio(config.inputPath, WORK_DIR);
 
   let rawCandidates;
+  let fullSegments = null;
   if (config.detectionMode === 'claude') {
     console.log('[2/4] 全体文字起こし＋Claude APIでハイライト検出中... (full transcript + Claude API highlight detection)');
-    rawCandidates = await detectCandidatesViaClaude(audioWavPath, WORK_DIR, config);
+    const detected = await detectCandidatesViaClaude(audioWavPath, WORK_DIR, config);
+    rawCandidates = detected.candidates;
+    fullSegments = detected.segments;
   } else {
     console.log('[2/4] 音声ピーク検出中... (detecting loudness peaks)');
     rawCandidates = await detectCandidates(audioWavPath, WORK_DIR, config);
@@ -75,7 +90,7 @@ async function main() {
   console.log(`  候補 ${rawCandidates.length} 件を検出しました。`);
 
   console.log('[3/4] クリップ生成中 (切り出し・縦化・字幕)... (cutting, verticalizing, transcribing, burning)');
-  const results = await runPool(rawCandidates, CONCURRENCY, (c) => processCandidate(c, config));
+  const results = await runPool(rawCandidates, CONCURRENCY, (c) => processCandidate(c, config, fullSegments));
 
   const succeeded = results.filter((r) => r.ok).map((r) => r.value);
   const failed = results.filter((r) => !r.ok);
